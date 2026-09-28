@@ -220,11 +220,22 @@ def dlqe(*args, **kwargs):
         Set the method used for computing the result.  Current methods are
         'slycot' and 'scipy'.  If set to None (default), try 'slycot'
         first and then 'scipy'.
+    form : str, optional
+        Type of estimator gain to return (see Notes):
+
+        * 'predictor' (default) : one-step-ahead predictor gain
+          :math:`L = A P C^T (C P C^T + R_N)^{-1}`, matching the filter
+          form used in the equation above.
+        * 'filter' : measurement-update (a posteriori) gain
+          :math:`L = P C^T (C P C^T + R_N)^{-1}`.  This form is computed
+          directly from `P` and is therefore well defined even when `A`
+          is singular.
 
     Returns
     -------
     L : 2D array
-        Kalman estimator gain.
+        Kalman estimator gain.  By default this is the predictor gain; see
+        the `form` parameter and the Notes below.
     P : 2D array
         Solution to Riccati equation.
 
@@ -233,12 +244,31 @@ def dlqe(*args, **kwargs):
             A P + P A^T - (P C^T + G N) R^{-1}  (C P + N^T G^T) + G Q G^T = 0
 
     E : 1D array
-        Eigenvalues of estimator poles eig(A - L C).
+        Eigenvalues of estimator poles eig(A - L C), where `L` is the
+        predictor gain (the error dynamics do not depend on `form`).
+
+    Notes
+    -----
+    Two conventions are in common use for the discrete-time Kalman gain.
+    The *predictor* (one-step-ahead) gain
+
+    .. math:: \tilde L = A P C^T (C P C^T + R_N)^{-1}
+
+    is used in the predictor/corrector recursion in a single step, whereas
+    the *filter* (measurement-update) gain
+
+    .. math:: L = P C^T (C P C^T + R_N)^{-1}
+
+    corrects the current state estimate before propagating it.  The two are
+    related by :math:`\tilde L = A L`.  The filter gain therefore cannot in
+    general be recovered from the predictor gain as :math:`A^{-1} \tilde L`
+    when `A` is singular, so ``form='filter'`` computes it directly from `P`.
 
     Examples
     --------
     >>> L, P, E = dlqe(A, G, C, QN, RN)                         # doctest: +SKIP
     >>> L, P, E = dlqe(A, G, C, QN, RN, NN)                     # doctest: +SKIP
+    >>> L, P, E = dlqe(A, G, C, QN, RN, form='filter')          # doctest: +SKIP
 
     See Also
     --------
@@ -252,6 +282,13 @@ def dlqe(*args, **kwargs):
 
     # Get the method to use (if specified as a keyword)
     method = kwargs.pop('method', None)
+
+    # Get the form of the estimator gain to return (see Notes in docstring)
+    form = kwargs.pop('form', 'predictor')
+    if form not in ('predictor', 'filter'):
+        raise ControlArgument(
+            "unknown form '%s'; must be 'predictor' or 'filter'" % form)
+
     if kwargs:
         raise TypeError("unrecognized keyword(s): ", str(kwargs))
 
@@ -297,10 +334,22 @@ def dlqe(*args, **kwargs):
     # Check dimensions of G (needed before calling care())
     _check_shape(QN, G.shape[1], G.shape[1], name="QN")
 
-    # Compute the result (dimension and symmetry checking done in dare())
+    # Compute the result (dimension and symmetry checking done in dare()).
+    # The dual dare() call returns the gain (C P C^T + RN)^-1 C P A^T, so
+    # LT.T is the one-step-ahead predictor gain A P C^T (C P C^T + RN)^-1.
     P, E, LT = dare(A.T, C.T, G @ QN @ G.T, RN, method=method,
                     _Bs="C", _Qs="QN", _Rs="RN", _Ss="NN")
-    return LT.T, P, E
+
+    if form == 'predictor':
+        L = LT.T
+    else:
+        # Measurement-update (filter) gain L = P C^T (C P C^T + RN)^-1,
+        # computed directly from P so that it is well defined even when A is
+        # singular (in which case L != A^-1 @ (predictor gain)).
+        RE = C @ P @ C.T + RN
+        L = np.linalg.solve(RE, C @ P).T
+
+    return L, P, E
 
 
 # Function to create an estimator

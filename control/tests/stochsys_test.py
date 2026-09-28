@@ -85,6 +85,42 @@ def test_DLQE(method):
     L, P, poles = dlqe(A, G, C, QN, RN, method=method)
     check_DLQE(L, P, poles, G, QN, RN)
 
+def test_dlqe_gain_form():
+    # Discrete-time system with an invertible A matrix
+    sys = ct.drss(4, 2, 3)
+    A, C = sys.A, sys.C
+    G, QN, RN = np.eye(4), np.eye(4), np.eye(2)
+
+    # Default gain is the one-step-ahead predictor gain
+    Lp, P, E = dlqe(A, G, C, QN, RN)
+    np.testing.assert_almost_equal(Lp, dlqe(A, G, C, QN, RN, form='predictor')[0])
+
+    # Filter gain matches the direct formula P C^T (C P C^T + RN)^-1 and does
+    # not change the returned Riccati solution or estimator eigenvalues
+    Lf, Pf, Ef = dlqe(A, G, C, QN, RN, form='filter')
+    RE = C @ P @ C.T + RN
+    np.testing.assert_almost_equal(Lf, P @ C.T @ np.linalg.inv(RE))
+    np.testing.assert_almost_equal(P, Pf)
+    np.testing.assert_almost_equal(E, Ef)
+
+    # Predictor and filter gains are related by  L_predictor = A L_filter
+    np.testing.assert_almost_equal(Lp, A @ Lf)
+
+    # Filter gain is well defined even when A is singular, in which case it
+    # cannot be recovered from the predictor gain via A^-1 (issue #1173)
+    A = np.array([[0.5, 0.0], [0.0, 0.0]])          # det(A) == 0
+    C = np.array([[1.0, 1.0]])
+    G, QN, RN = np.eye(2), np.eye(2), np.array([[1.0]])
+    Lp, P, _ = dlqe(A, G, C, QN, RN)
+    Lf, _, _ = dlqe(A, G, C, QN, RN, form='filter')
+    RE = C @ P @ C.T + RN
+    np.testing.assert_almost_equal(Lf, P @ C.T @ np.linalg.inv(RE))
+    np.testing.assert_almost_equal(A @ Lf, Lp)
+
+    # An unknown gain form raises an informative error
+    with pytest.raises(ControlArgument, match="unknown form"):
+        dlqe(A, G, C, QN, RN, form='bogus')
+
 def test_lqe_discrete():
     """Test overloading of lqe operator for discrete-time systems"""
     csys = ct.rss(2, 1, 1)
